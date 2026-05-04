@@ -12,6 +12,7 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
 from paperdex.models import Source
 from pydantic import BaseModel, Field
+
 from runline_ai import llm, retriever
 
 
@@ -140,15 +141,12 @@ def _classify(state: AgentState) -> dict:
 
 def _diagnose(state: AgentState) -> dict:
     sources = state.get("sources", [])
-    context = "\n\n".join(
-        f"[Source {i}] {s.text}" for i, s in enumerate(sources, start=1)
-    )
+    context = "\n\n".join(f"[Source {i}] {s.text}" for i, s in enumerate(sources, start=1))
     cls = state.get("classification")
     machine_info = ""
     if cls and (cls.machine_id or cls.error_code):
         machine_info = (
-            f"Machine: {cls.machine_id or 'unknown'}, "
-            f"Error: {cls.error_code or 'unknown'}\n\n"
+            f"Machine: {cls.machine_id or 'unknown'}, Error: {cls.error_code or 'unknown'}\n\n"
         )
 
     result = _diagnoser_llm.invoke(
@@ -199,9 +197,7 @@ def _solve(state: AgentState) -> dict:
 
     top_cause = diagnosis.items[0]
     sources = state.get("sources", [])
-    context = "\n\n".join(
-        f"[Source {i}] {s.text}" for i, s in enumerate(sources, start=1)
-    )
+    context = "\n\n".join(f"[Source {i}] {s.text}" for i, s in enumerate(sources, start=1))
 
     result = _solver_llm.invoke(
         [
@@ -276,9 +272,7 @@ def _format_final(state: AgentState) -> dict:
     if diagnosis:
         parts.append("\n## Possible Causes\n")
         for i, item in enumerate(diagnosis.items, start=1):
-            parts.append(
-                f"{i}. **{item.cause}** ({item.likelihood:.0%}) — {item.reasoning}"
-            )
+            parts.append(f"{i}. **{item.cause}** ({item.likelihood:.0%}) — {item.reasoning}")
 
     if solution:
         parts.append("\n## Solution Steps\n")
@@ -305,9 +299,7 @@ def _blocked(state: AgentState) -> dict:
     """Safety verifier rejected the solution — return a refusal message."""
     safety = state.get("safety")
     issue = (
-        safety.blocking_issue
-        if safety and safety.blocking_issue
-        else "safety verification failed"
+        safety.blocking_issue if safety and safety.blocking_issue else "safety verification failed"
     )
     final = (
         f"❌ Solution blocked by safety verification.\n\n"
@@ -327,9 +319,7 @@ def _safety_route(state: AgentState) -> str:
 
 def _quick_answer(state: AgentState) -> dict:
     history = state.get("messages") or [HumanMessage(content=state["question"])]
-    response = llm.invoke(
-        [SystemMessage(content="Give a brief, one-paragraph answer."), *history]
-    )
+    response = llm.invoke([SystemMessage(content="Give a brief, one-paragraph answer."), *history])
     final = str(response.content)
     return {"final_answer": final, "messages": [AIMessage(content=final)]}
 

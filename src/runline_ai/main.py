@@ -61,9 +61,7 @@ def root() -> dict[str, str]:
 
 @app.post("/chat")
 def chat(request: ChatRequest) -> ChatResponse:
-    logger.info(
-        f"chat request: {request.question[:50]!r} thread={request.thread_id}"
-    )
+    logger.info(f"chat request: {request.question[:50]!r} thread={request.thread_id}")
     result = graph.invoke(_build_input(request), config=_build_config(request))
 
     cls = result["classification"]
@@ -81,9 +79,7 @@ def chat(request: ChatRequest) -> ChatResponse:
 @app.post("/chat/stream")
 async def chat_stream(request: ChatRequest) -> StreamingResponse:
     """SSE endpoint — emits one event per agent node as it completes."""
-    logger.info(
-        f"chat stream request: {request.question[:50]!r} thread={request.thread_id}"
-    )
+    logger.info(f"chat stream request: {request.question[:50]!r} thread={request.thread_id}")
 
     async def event_stream():
         try:
