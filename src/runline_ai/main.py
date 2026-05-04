@@ -35,6 +35,6 @@ def chat(request: ChatRequest) -> ChatResponse:
         category=cls.category,
         confidence=cls.confidence,
         reasoning=cls.reasoning,
-        answer=result["answer"],
+        answer=result["final_answer"],
         used_sources=len(sources),
     )
