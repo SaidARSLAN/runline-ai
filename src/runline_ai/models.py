@@ -3,6 +3,14 @@ from pydantic import BaseModel, Field
 
 class ChatRequest(BaseModel):
     question: str = Field(min_length=3, max_length=500)
+    thread_id: str | None = Field(
+        default=None,
+        description=(
+            "Conversation thread identifier. Reuse the same thread_id across "
+            "turns to keep conversation history. Omit for stateless one-shot "
+            "calls."
+        ),
+    )
 
 
 class ChatResponse(BaseModel):

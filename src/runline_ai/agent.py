@@ -4,10 +4,12 @@ This is the heart of runline_ai. The graph is compiled once at module import
 and exposed as the `graph` symbol.
 """
 
-from typing import Literal, NotRequired, Required, TypedDict
+from typing import Annotated, Literal, NotRequired, Required, TypedDict
 
-from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
+from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
+from langgraph.graph.message import add_messages
 from paperdex.models import Source
 from pydantic import BaseModel, Field
 from runline_ai import llm, retriever
@@ -99,6 +101,12 @@ _verifier_llm = llm.with_structured_output(SafetyVerdict)
 class AgentState(TypedDict):
     question: Required[str]
 
+    # Conversation history — populated across turns when a thread_id is used.
+    # The add_messages reducer means new messages APPEND to the list rather
+    # than overwriting it. The endpoint pushes a HumanMessage on each turn,
+    # and the final-answer node pushes an AIMessage with the response.
+    messages: NotRequired[Annotated[list[BaseMessage], add_messages]]
+
     # Each agent fills its own field
     classification: NotRequired[Classification]
     sources: NotRequired[list[Source]]
@@ -111,15 +119,20 @@ class AgentState(TypedDict):
 
 
 def _classify(state: AgentState) -> dict:
+    # Use full conversation history if available (multi-turn), otherwise
+    # fall back to the single question (single-turn callers / first turn).
+    history = state.get("messages") or [HumanMessage(content=state["question"])]
     result = _classifier_llm.invoke(
         [
             SystemMessage(
                 content=(
                     "You are a classifier for a manufacturing operator chatbot. "
-                    "Classify into one of three categories."
+                    "Classify the latest user message, taking earlier messages "
+                    "in the conversation into account when interpreting "
+                    "follow-up references like 'it', 'that', or 'again'."
                 )
             ),
-            HumanMessage(content=state["question"]),
+            *history,
         ]
     )
     return {"classification": result}
@@ -284,7 +297,8 @@ def _format_final(state: AgentState) -> dict:
         else:
             parts.append(f"❌ BLOCKED: {safety.blocking_issue}")
 
-    return {"final_answer": "\n".join(parts)}
+    final = "\n".join(parts)
+    return {"final_answer": final, "messages": [AIMessage(content=final)]}
 
 
 def _blocked(state: AgentState) -> dict:
@@ -295,13 +309,12 @@ def _blocked(state: AgentState) -> dict:
         if safety and safety.blocking_issue
         else "safety verification failed"
     )
-    return {
-        "final_answer": (
-            f"❌ Solution blocked by safety verification.\n\n"
-            f"**Reason:** {issue}\n\n"
-            f"Please consult an engineer before proceeding."
-        )
-    }
+    final = (
+        f"❌ Solution blocked by safety verification.\n\n"
+        f"**Reason:** {issue}\n\n"
+        f"Please consult an engineer before proceeding."
+    )
+    return {"final_answer": final, "messages": [AIMessage(content=final)]}
 
 
 def _safety_route(state: AgentState) -> str:
@@ -313,19 +326,19 @@ def _safety_route(state: AgentState) -> str:
 
 
 def _quick_answer(state: AgentState) -> dict:
+    history = state.get("messages") or [HumanMessage(content=state["question"])]
     response = llm.invoke(
-        [
-            SystemMessage(content="Give a brief, one-paragraph answer."),
-            HumanMessage(content=state["question"]),
-        ]
+        [SystemMessage(content="Give a brief, one-paragraph answer."), *history]
     )
-    return {"final_answer": str(response.content)}
+    final = str(response.content)
+    return {"final_answer": final, "messages": [AIMessage(content=final)]}
 
 
 def _reject(state: AgentState) -> dict:
     cls = state.get("classification")
     reason = cls.reasoning if cls else "unsafe content"
-    return {"final_answer": f"Refused: {reason}"}
+    final = f"Refused: {reason}"
+    return {"final_answer": final, "messages": [AIMessage(content=final)]}
 
 
 def _route(state: AgentState) -> str:
@@ -378,7 +391,10 @@ def _build_graph():
     builder.add_edge("quick_answer", END)
     builder.add_edge("reject", END)
 
-    return builder.compile()
+    # MemorySaver persists state per thread_id (in-process, lost on restart).
+    # Production deployments would swap this for SqliteSaver or PostgresSaver.
+    checkpointer = MemorySaver()
+    return builder.compile(checkpointer=checkpointer)
 
 
 graph = _build_graph()
