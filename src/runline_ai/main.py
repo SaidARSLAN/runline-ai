@@ -6,11 +6,13 @@ from typing import Any
 from fastapi import FastAPI
 from fastapi.responses import StreamingResponse
 from langchain_core.messages import HumanMessage
+from langfuse import get_client
 from langfuse.langchain import CallbackHandler
 from pydantic import BaseModel
 
 from runline_ai.agent import graph
 from runline_ai.models import ChatRequest, ChatResponse
+from runline_ai.scoring import score_trace
 
 APP_VERSION = "0.1.0"
 ENVIRONMENT = os.getenv("ENVIRONMENT", "dev")
@@ -22,6 +24,7 @@ logging.basicConfig(
 logger = logging.getLogger("runline_ai")
 
 langfuse_handler = CallbackHandler()
+langfuse = get_client()
 
 app = FastAPI(
     title="Runline AI",
@@ -59,7 +62,7 @@ def _build_config(request: ChatRequest) -> dict[str, Any]:
         "configurable": {"thread_id": thread_id},
         "callbacks": [langfuse_handler],
         "metadata": metadata,
-        "run_name": "chat",
+        "run_name": "graph",
     }
 
 
@@ -71,7 +74,17 @@ def root() -> dict[str, str]:
 @app.post("/chat")
 def chat(request: ChatRequest) -> ChatResponse:
     logger.info(f"chat request: {request.question[:50]!r} thread={request.thread_id}")
-    result = graph.invoke(_build_input(request), config=_build_config(request))
+
+    with langfuse.start_as_current_observation(
+        name="chat",
+        as_type="span",
+        input={"question": request.question, "thread_id": request.thread_id},
+    ):
+        result = graph.invoke(_build_input(request), config=_build_config(request))
+        trace_id = langfuse.get_current_trace_id()
+        if trace_id:
+            for score in score_trace(result):
+                langfuse.create_score(trace_id=trace_id, **score)
 
     cls = result["classification"]
     sources = result.get("sources", [])
