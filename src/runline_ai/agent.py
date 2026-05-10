@@ -70,7 +70,7 @@ class SolutionStep(BaseModel):
 class SolutionPlan(BaseModel):
     """Output schema for the solution planner agent."""
 
-    steps: list[SolutionStep] = Field(min_length=1, max_length=10)
+    steps: list[SolutionStep] = Field(min_length=1, max_length=12)
     estimated_minutes: int = Field(
         ge=1,
         description="Rough total time estimate for executing all steps",
