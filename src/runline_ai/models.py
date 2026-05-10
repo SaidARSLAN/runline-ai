@@ -11,6 +11,13 @@ class ChatRequest(BaseModel):
             "calls."
         ),
     )
+    user_id: str | None = Field(
+        default=None,
+        description=(
+            "Operator identifier. Used for per-user analytics and filtering "
+            "in Langfuse (cost per user, error rate per user, audit trails)."
+        ),
+    )
 
 
 class ChatResponse(BaseModel):

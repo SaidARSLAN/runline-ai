@@ -1,5 +1,6 @@
 import json
 import logging
+import os
 from typing import Any
 
 from fastapi import FastAPI
@@ -10,6 +11,9 @@ from pydantic import BaseModel
 
 from runline_ai.agent import graph
 from runline_ai.models import ChatRequest, ChatResponse
+
+APP_VERSION = "0.1.0"
+ENVIRONMENT = os.getenv("ENVIRONMENT", "dev")
 
 logging.basicConfig(
     level=logging.INFO,
@@ -22,7 +26,7 @@ langfuse_handler = CallbackHandler()
 app = FastAPI(
     title="Runline AI",
     description="Manufacturing operator copilot — multi-agent system with LangGraph",
-    version="0.1.0",
+    version=APP_VERSION,
 )
 
 
@@ -43,13 +47,18 @@ def _build_input(request: ChatRequest) -> dict[str, Any]:
 
 def _build_config(request: ChatRequest) -> dict[str, Any]:
     thread_id = request.thread_id or "_one_shot"
+    metadata: dict[str, Any] = {
+        "langfuse_session_id": thread_id,
+        "langfuse_tags": ["runline-ai", "chat", f"env:{ENVIRONMENT}"],
+        "environment": ENVIRONMENT,
+        "app_version": APP_VERSION,
+    }
+    if request.user_id:
+        metadata["langfuse_user_id"] = request.user_id
     return {
         "configurable": {"thread_id": thread_id},
         "callbacks": [langfuse_handler],
-        "metadata": {
-            "langfuse_session_id": thread_id,
-            "langfuse_tags": ["runline-ai", "chat"],
-        },
+        "metadata": metadata,
         "run_name": "chat",
     }
 
