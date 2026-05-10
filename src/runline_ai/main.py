@@ -5,6 +5,7 @@ from typing import Any
 from fastapi import FastAPI
 from fastapi.responses import StreamingResponse
 from langchain_core.messages import HumanMessage
+from langfuse.langchain import CallbackHandler
 from pydantic import BaseModel
 
 from runline_ai.agent import graph
@@ -16,6 +17,8 @@ logging.basicConfig(
 )
 logger = logging.getLogger("runline_ai")
 
+langfuse_handler = CallbackHandler()
+
 app = FastAPI(
     title="Runline AI",
     description="Manufacturing operator copilot — multi-agent system with LangGraph",
@@ -24,7 +27,6 @@ app = FastAPI(
 
 
 def _to_jsonable(obj: Any) -> Any:
-    """Help json.dumps serialize Pydantic instances and other rich types."""
     if isinstance(obj, BaseModel):
         return obj.model_dump()
     if hasattr(obj, "to_json"):
@@ -33,12 +35,6 @@ def _to_jsonable(obj: Any) -> Any:
 
 
 def _build_input(request: ChatRequest) -> dict[str, Any]:
-    """Construct the graph input from a chat request.
-
-    The user's question is pushed as a HumanMessage; combined with the
-    add_messages reducer on AgentState.messages, this appends to any prior
-    history loaded by the checkpointer for this thread_id.
-    """
     return {
         "question": request.question,
         "messages": [HumanMessage(content=request.question)],
@@ -46,12 +42,16 @@ def _build_input(request: ChatRequest) -> dict[str, Any]:
 
 
 def _build_config(request: ChatRequest) -> dict[str, Any]:
-    """Pass thread_id through so the checkpointer can load/save history."""
-    if request.thread_id:
-        return {"configurable": {"thread_id": request.thread_id}}
-    # Without a thread_id, we still need a config object but no persistence.
-    # Using a synthetic one-shot id keeps every call isolated.
-    return {"configurable": {"thread_id": "_one_shot"}}
+    thread_id = request.thread_id or "_one_shot"
+    return {
+        "configurable": {"thread_id": thread_id},
+        "callbacks": [langfuse_handler],
+        "metadata": {
+            "langfuse_session_id": thread_id,
+            "langfuse_tags": ["runline-ai", "chat"],
+        },
+        "run_name": "chat",
+    }
 
 
 @app.get("/")
