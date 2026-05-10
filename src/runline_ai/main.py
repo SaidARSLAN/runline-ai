@@ -1,14 +1,22 @@
 import json
 import logging
+import os
 from typing import Any
 
-from fastapi import FastAPI
+from fastapi import BackgroundTasks, FastAPI
 from fastapi.responses import StreamingResponse
 from langchain_core.messages import HumanMessage
+from langfuse import get_client
+from langfuse.langchain import CallbackHandler
 from pydantic import BaseModel
 
 from runline_ai.agent import graph
+from runline_ai.judges import judge_answer_relevance
 from runline_ai.models import ChatRequest, ChatResponse
+from runline_ai.scoring import score_trace
+
+APP_VERSION = "0.1.0"
+ENVIRONMENT = os.getenv("ENVIRONMENT", "dev")
 
 logging.basicConfig(
     level=logging.INFO,
@@ -16,15 +24,17 @@ logging.basicConfig(
 )
 logger = logging.getLogger("runline_ai")
 
+langfuse_handler = CallbackHandler()
+langfuse = get_client()
+
 app = FastAPI(
     title="Runline AI",
     description="Manufacturing operator copilot — multi-agent system with LangGraph",
-    version="0.1.0",
+    version=APP_VERSION,
 )
 
 
 def _to_jsonable(obj: Any) -> Any:
-    """Help json.dumps serialize Pydantic instances and other rich types."""
     if isinstance(obj, BaseModel):
         return obj.model_dump()
     if hasattr(obj, "to_json"):
@@ -33,12 +43,6 @@ def _to_jsonable(obj: Any) -> Any:
 
 
 def _build_input(request: ChatRequest) -> dict[str, Any]:
-    """Construct the graph input from a chat request.
-
-    The user's question is pushed as a HumanMessage; combined with the
-    add_messages reducer on AgentState.messages, this appends to any prior
-    history loaded by the checkpointer for this thread_id.
-    """
     return {
         "question": request.question,
         "messages": [HumanMessage(content=request.question)],
@@ -46,12 +50,21 @@ def _build_input(request: ChatRequest) -> dict[str, Any]:
 
 
 def _build_config(request: ChatRequest) -> dict[str, Any]:
-    """Pass thread_id through so the checkpointer can load/save history."""
-    if request.thread_id:
-        return {"configurable": {"thread_id": request.thread_id}}
-    # Without a thread_id, we still need a config object but no persistence.
-    # Using a synthetic one-shot id keeps every call isolated.
-    return {"configurable": {"thread_id": "_one_shot"}}
+    thread_id = request.thread_id or "_one_shot"
+    metadata: dict[str, Any] = {
+        "langfuse_session_id": thread_id,
+        "langfuse_tags": ["runline-ai", "chat", f"env:{ENVIRONMENT}"],
+        "environment": ENVIRONMENT,
+        "app_version": APP_VERSION,
+    }
+    if request.user_id:
+        metadata["langfuse_user_id"] = request.user_id
+    return {
+        "configurable": {"thread_id": thread_id},
+        "callbacks": [langfuse_handler],
+        "metadata": metadata,
+        "run_name": "graph",
+    }
 
 
 @app.get("/")
@@ -60,9 +73,25 @@ def root() -> dict[str, str]:
 
 
 @app.post("/chat")
-def chat(request: ChatRequest) -> ChatResponse:
+def chat(request: ChatRequest, background_tasks: BackgroundTasks) -> ChatResponse:
     logger.info(f"chat request: {request.question[:50]!r} thread={request.thread_id}")
-    result = graph.invoke(_build_input(request), config=_build_config(request))
+
+    with langfuse.start_as_current_observation(
+        name="chat",
+        as_type="span",
+        input={"question": request.question, "thread_id": request.thread_id},
+    ):
+        result = graph.invoke(_build_input(request), config=_build_config(request))
+        trace_id = langfuse.get_current_trace_id()
+        if trace_id:
+            for score in score_trace(result):
+                langfuse.create_score(trace_id=trace_id, **score)
+            background_tasks.add_task(
+                judge_answer_relevance,
+                question=request.question,
+                answer=result["final_answer"],
+                trace_id=trace_id,
+            )
 
     cls = result["classification"]
     sources = result.get("sources", [])

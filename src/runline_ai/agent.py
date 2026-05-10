@@ -70,7 +70,7 @@ class SolutionStep(BaseModel):
 class SolutionPlan(BaseModel):
     """Output schema for the solution planner agent."""
 
-    steps: list[SolutionStep] = Field(min_length=1, max_length=10)
+    steps: list[SolutionStep] = Field(min_length=1, max_length=12)
     estimated_minutes: int = Field(
         ge=1,
         description="Rough total time estimate for executing all steps",
@@ -130,7 +130,11 @@ def _classify(state: AgentState) -> dict:
                     "You are a classifier for a manufacturing operator chatbot. "
                     "Classify the latest user message, taking earlier messages "
                     "in the conversation into account when interpreting "
-                    "follow-up references like 'it', 'that', or 'again'."
+                    "follow-up references like 'it', 'that', or 'again'.\n\n"
+                    "ALWAYS call the Classification tool. NEVER respond with "
+                    "plain text. Even general or definitional questions must "
+                    "be classified into one of the categories — do not answer "
+                    "the question, only classify it."
                 )
             ),
             *history,
@@ -207,7 +211,12 @@ def _solve(state: AgentState) -> dict:
                     "Given the most likely root cause and supporting documentation, "
                     "produce step-by-step instructions. Mark each step as "
                     "safety_critical if it requires lockout-tagout, PPE, or "
-                    "any risk acknowledgment before proceeding."
+                    "any risk acknowledgment before proceeding.\n\n"
+                    "Hard limit: produce AT MOST 10 steps. If the procedure "
+                    "needs more, combine related actions into a single step "
+                    "(e.g. 'Inspect cables and tighten connections' instead "
+                    "of two separate steps). Brevity matters more than "
+                    "exhaustiveness — operators will not read past 10 steps."
                 )
             ),
             HumanMessage(
