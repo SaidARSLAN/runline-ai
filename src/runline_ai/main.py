@@ -3,7 +3,7 @@ import logging
 import os
 from typing import Any
 
-from fastapi import FastAPI
+from fastapi import BackgroundTasks, FastAPI
 from fastapi.responses import StreamingResponse
 from langchain_core.messages import HumanMessage
 from langfuse import get_client
@@ -11,6 +11,7 @@ from langfuse.langchain import CallbackHandler
 from pydantic import BaseModel
 
 from runline_ai.agent import graph
+from runline_ai.judges import judge_answer_relevance
 from runline_ai.models import ChatRequest, ChatResponse
 from runline_ai.scoring import score_trace
 
@@ -72,7 +73,7 @@ def root() -> dict[str, str]:
 
 
 @app.post("/chat")
-def chat(request: ChatRequest) -> ChatResponse:
+def chat(request: ChatRequest, background_tasks: BackgroundTasks) -> ChatResponse:
     logger.info(f"chat request: {request.question[:50]!r} thread={request.thread_id}")
 
     with langfuse.start_as_current_observation(
@@ -85,6 +86,12 @@ def chat(request: ChatRequest) -> ChatResponse:
         if trace_id:
             for score in score_trace(result):
                 langfuse.create_score(trace_id=trace_id, **score)
+            background_tasks.add_task(
+                judge_answer_relevance,
+                question=request.question,
+                answer=result["final_answer"],
+                trace_id=trace_id,
+            )
 
     cls = result["classification"]
     sources = result.get("sources", [])
